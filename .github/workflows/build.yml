@@ -83,7 +83,33 @@ jobs:
 
       - name: Build APK
         working-directory: ${{ env.PROJ }}
-        run: gradle assembleRelease --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/build-log.txt"
+
+      - name: Tóm tắt lỗi build (khi lỗi)
+        if: failure()
+        run: |
+          LOG="$GITHUB_WORKSPACE/build-log.txt"
+          [ -f "$LOG" ] || exit 0
+          {
+            echo "## Lỗi build — gửi phần này cho người hỗ trợ"
+            echo '```'
+            # Lỗi biên dịch Kotlin (e: ...), lỗi KSP/Room, lỗi tài nguyên (AAPT), và phần "What went wrong"
+            grep -nE '^e: |\[ksp\]|error:|ERROR:|AAPT|Execution failed for task|What went wrong' "$LOG" | head -60 || true
+            echo '---'
+            grep -n -A12 'What went wrong' "$LOG" | head -40 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          (grep -E '^e: ' "$LOG" || true) | head -20 | while IFS= read -r line; do echo "::error::$line"; done
+
+      - name: Tải nhật ký build lên (khi lỗi)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChapButTaoKich-build-log
+          path: build-log.txt
+          if-no-files-found: ignore
 
       - name: Tải APK lên
         uses: actions/upload-artifact@v4
