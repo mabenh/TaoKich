@@ -1,0 +1,83 @@
+name: Build APK Chấp Bút Tạo Kịch
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Lấy mã nguồn
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Giải nén dự án (tự chọn tệp zip tải lên gần nhất)
+        run: |
+          ZIP=$(git log --diff-filter=AM --name-only --pretty=format: -- '*.zip' | grep -m1 . || true)
+          if [ -z "$ZIP" ] || [ ! -f "$ZIP" ]; then ZIP=$(ls -1 *.zip | head -1); fi
+          echo "Dùng tệp: $ZIP"
+          unzip -q -o "$ZIP" -d build-src
+          # Tự tìm thư mục dự án (thư mục chứa settings.gradle.kts), không phụ thuộc tên thư mục trong zip
+          SETTINGS=$(find build-src -maxdepth 3 -name settings.gradle.kts | head -1)
+          if [ -z "$SETTINGS" ]; then echo "::error::Không tìm thấy settings.gradle.kts trong $ZIP"; exit 1; fi
+          PROJ=$(dirname "$SETTINGS")
+          echo "PROJ=$PROJ" >> "$GITHUB_ENV"
+          echo "Thư mục dự án: $PROJ"
+          echo "org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8 -Djava.awt.headless=true" >> "$PROJ/gradle.properties"
+          echo "===== PHIÊN BẢN SẼ BUILD ====="
+          grep -E "applicationId|versionCode|versionName" "$PROJ/app/build.gradle.kts"
+          grep app_name "$PROJ/app/src/main/res/values/strings.xml"
+
+      - name: Cài Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Cài Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Cài Android SDK 36
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "platforms;android-36.1" "build-tools;36.0.0" || true
+
+      - name: Đặt khóa ký
+        env:
+          SIGNING_BUNDLE: ${{ secrets.SIGNING_BUNDLE }}
+        run: |
+          if [ -z "$SIGNING_BUNDLE" ]; then
+            echo "::error::Chưa tạo secret SIGNING_BUNDLE (Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+          echo "$SIGNING_BUNDLE" | base64 -d > signing.zip
+          unzip -q -o signing.zip -d "$PROJ"
+          rm signing.zip
+
+      - name: Chạy unit test
+        working-directory: ${{ env.PROJ }}
+        run: gradle :app:testDebugUnitTest --no-daemon
+
+      - name: Build APK
+        working-directory: ${{ env.PROJ }}
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Tải APK lên
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChapButTaoKich-APK
+          path: ${{ env.PROJ }}/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Tải kết quả unit test lên (khi test lỗi)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChapButTaoKich-test-report
+          path: ${{ env.PROJ }}/app/build/reports/tests/
+          if-no-files-found: ignore
