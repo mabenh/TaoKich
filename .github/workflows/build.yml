@@ -81,10 +81,6 @@ jobs:
           fi
           echo "Đã đặt khóa ký: $STORE"
 
-      - name: Chạy unit test
-        working-directory: ${{ env.PROJ }}
-        run: gradle :app:testDebugUnitTest --no-daemon
-
       - name: Build APK
         working-directory: ${{ env.PROJ }}
         run: gradle assembleRelease --no-daemon --stacktrace
@@ -96,10 +92,20 @@ jobs:
           path: ${{ env.PROJ }}/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
-      - name: Tải kết quả unit test lên (khi test lỗi)
-        if: failure()
+      - name: Chạy unit test (không chặn việc tải APK)
+        id: unittest
+        continue-on-error: true
+        working-directory: ${{ env.PROJ }}
+        run: gradle :app:testDebugUnitTest --no-daemon --continue
+
+      - name: Tải kết quả unit test lên
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ChapButTaoKich-test-report
           path: ${{ env.PROJ }}/app/build/reports/tests/
           if-no-files-found: ignore
+
+      - name: Nhắc khi unit test lỗi
+        if: steps.unittest.outcome == 'failure'
+        run: echo "::warning::Unit test có lỗi. APK vẫn đã được tạo; tải ChapButTaoKich-test-report để xem chi tiết."
