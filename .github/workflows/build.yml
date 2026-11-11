@@ -32,7 +32,7 @@ jobs:
           grep app_name "$PROJ/app/src/main/res/values/strings.xml"
 
       - name: Cài Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
@@ -56,8 +56,30 @@ jobs:
             exit 1
           fi
           echo "$SIGNING_BUNDLE" | base64 -d > signing.zip
+          # Zip tạo bằng PowerShell (Compress-Archive) dùng dấu "\" trong đường dẫn: unzip vẫn giải nén đúng
+          # nhưng trả mã 1 (cảnh báo). Chỉ coi là lỗi khi mã > 1.
+          set +e
           unzip -q -o signing.zip -d "$PROJ"
-          rm signing.zip
+          CODE=$?
+          set -e
+          rm -f signing.zip
+          if [ "$CODE" -gt 1 ]; then echo "::error::Không giải nén được SIGNING_BUNDLE (mã $CODE)"; exit 1; fi
+          # Nếu còn tệp mang tên kiểu "keystore\butvan-release.jks" thì đưa về đúng thư mục
+          find "$PROJ" -maxdepth 1 -name '*\\*' -print0 | while IFS= read -r -d '' f; do
+            n=$(basename "$f" | tr '\\' '/')
+            mkdir -p "$PROJ/$(dirname "$n")"
+            mv "$f" "$PROJ/$n"
+          done
+          if [ ! -f "$PROJ/keystore.properties" ]; then
+            echo "::error::Trong SIGNING_BUNDLE không có keystore.properties ở thư mục gốc"; exit 1
+          fi
+          STORE=$(grep -E '^storeFile=' "$PROJ/keystore.properties" | cut -d= -f2- | tr -d '\r' | tr '\\' '/')
+          if [ ! -f "$PROJ/$STORE" ]; then
+            echo "::error::Không thấy tệp khóa '$STORE' (khai báo trong keystore.properties). Các tệp đã giải nén:"
+            find "$PROJ" -maxdepth 2 -name '*.jks' -o -maxdepth 2 -name 'keystore.properties'
+            exit 1
+          fi
+          echo "Đã đặt khóa ký: $STORE"
 
       - name: Chạy unit test
         working-directory: ${{ env.PROJ }}
